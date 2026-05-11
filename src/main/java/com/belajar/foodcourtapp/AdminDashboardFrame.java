@@ -1,9 +1,15 @@
 package com.belajar.foodcourtapp;
 
 import javax.swing.*;
+import javax.swing.filechooser.FileNameExtensionFilter;
 import javax.swing.table.DefaultTableModel;
 import java.awt.*;
 import java.awt.event.*;
+import java.awt.image.BufferedImage;
+import java.io.*;
+import java.net.URL;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
 import java.sql.*;
 import java.util.ArrayList;
 import java.util.List;
@@ -14,11 +20,19 @@ public class AdminDashboardFrame extends JFrame {
     private MenuPanel menuPanel;
     private OrderPanel orderPanel;
 
+    // Direktori upload
+    public static final String UPLOAD_TENANT_DIR = "uploads/tenant/";
+    public static final String UPLOAD_MENU_DIR = "uploads/menu/";
+
     public AdminDashboardFrame() {
         setTitle("FoodCourt Go - Admin Dashboard");
-        setSize(900, 600);
+        setSize(950, 650);
         setDefaultCloseOperation(EXIT_ON_CLOSE);
         setLocationRelativeTo(null);
+
+        // Buat folder upload jika belum ada
+        new File(UPLOAD_TENANT_DIR).mkdirs();
+        new File(UPLOAD_MENU_DIR).mkdirs();
 
         tabbedPane = new JTabbedPane();
 
@@ -39,25 +53,31 @@ public class AdminDashboardFrame extends JFrame {
         private DefaultTableModel tableModel;
         private JTextField tfSearch, tfId, tfNama, tfKategori, tfDeskripsi;
         private JButton btnTambah, btnEdit, btnHapus, btnRefresh, btnClear;
+        private JLabel imagePreview;
+        private JButton btnPilihGambar, btnHapusGambar;
+        private File selectedImageFile;  // file yang dipilih dari komputer
+        private boolean deletePhoto = false; // flag untuk edit
 
         public TenantPanel() {
             setLayout(new BorderLayout(10, 10));
             setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
 
-            // -- Form Panel --
+            // -- Form Panel (menggunakan dua bagian: kiri form, kanan preview) --
+            JPanel topPanel = new JPanel(new BorderLayout(10, 10));
+
+            // Form kiri
             JPanel formPanel = new JPanel(new GridBagLayout());
             formPanel.setBorder(BorderFactory.createTitledBorder("Form Tenant"));
             GridBagConstraints gbc = new GridBagConstraints();
             gbc.insets = new Insets(5, 5, 5, 5);
             gbc.fill = GridBagConstraints.HORIZONTAL;
 
-            // Baris 0: ID
+            // Baris 0: ID & Search
             gbc.gridx = 0; gbc.gridy = 0;
             formPanel.add(new JLabel("ID:"), gbc);
             gbc.gridx = 1;
             tfId = new JTextField(10);
             formPanel.add(tfId, gbc);
-            // Baris 0: Search
             gbc.gridx = 2;
             formPanel.add(new JLabel("Cari:"), gbc);
             gbc.gridx = 3;
@@ -85,7 +105,7 @@ public class AdminDashboardFrame extends JFrame {
             gbc.gridx = 0; gbc.gridy = 3;
             formPanel.add(new JLabel("Deskripsi:"), gbc);
             gbc.gridx = 1;
-            gbc.gridwidth = 3; // Lebar 3 kolom
+            gbc.gridwidth = 3;
             tfDeskripsi = new JTextField(20);
             formPanel.add(tfDeskripsi, gbc);
 
@@ -106,15 +126,39 @@ public class AdminDashboardFrame extends JFrame {
             btnPanel.add(btnClear);
             formPanel.add(btnPanel, gbc);
 
-            add(formPanel, BorderLayout.NORTH);
+            topPanel.add(formPanel, BorderLayout.CENTER);
+
+            // Preview gambar di kanan
+            JPanel imagePanel = new JPanel(new BorderLayout());
+            imagePanel.setBorder(BorderFactory.createTitledBorder("Foto Tenant"));
+            imagePreview = new JLabel("", SwingConstants.CENTER);
+            imagePreview.setPreferredSize(new Dimension(200, 200));
+            imagePreview.setBorder(BorderFactory.createLineBorder(Color.GRAY));
+            imagePanel.add(imagePreview, BorderLayout.CENTER);
+
+            JPanel btnImagePanel = new JPanel(new FlowLayout());
+            btnPilihGambar = new JButton("Pilih Gambar");
+            btnHapusGambar = new JButton("Hapus Gambar");
+            btnImagePanel.add(btnPilihGambar);
+            btnImagePanel.add(btnHapusGambar);
+            imagePanel.add(btnImagePanel, BorderLayout.SOUTH);
+
+            topPanel.add(imagePanel, BorderLayout.EAST);
+
+            add(topPanel, BorderLayout.NORTH);
 
             // -- Table --
-            tableModel = new DefaultTableModel(new String[]{"ID", "Nama", "Kategori", "Deskripsi"}, 0) {
+            tableModel = new DefaultTableModel(new String[]{"ID", "Nama", "Kategori", "Deskripsi", "Foto"}, 0) {
                 @Override
                 public boolean isCellEditable(int row, int column) { return false; }
             };
             table = new JTable(tableModel);
             table.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+            // Sembunyikan kolom foto (index 4)
+            table.getColumnModel().getColumn(4).setMinWidth(0);
+            table.getColumnModel().getColumn(4).setMaxWidth(0);
+            table.getColumnModel().getColumn(4).setWidth(0);
+
             JScrollPane scrollPane = new JScrollPane(table);
             scrollPane.setBorder(BorderFactory.createEmptyBorder());
             add(scrollPane, BorderLayout.CENTER);
@@ -134,8 +178,20 @@ public class AdminDashboardFrame extends JFrame {
                         tfNama.setText((String) tableModel.getValueAt(row, 1));
                         tfKategori.setText((String) tableModel.getValueAt(row, 2));
                         tfDeskripsi.setText((String) tableModel.getValueAt(row, 3));
+                        String foto = (String) tableModel.getValueAt(row, 4);
+                        loadPreviewImage(foto, "restaurant");
+                        selectedImageFile = null;
+                        deletePhoto = false;
                     }
                 }
+            });
+
+            btnPilihGambar.addActionListener(e -> pilihGambar());
+            btnHapusGambar.addActionListener(e -> {
+                selectedImageFile = null;
+                deletePhoto = true;
+                imagePreview.setIcon(null);
+                imagePreview.setText("Foto akan dihapus");
             });
 
             btnTambah.addActionListener(e -> {
@@ -147,12 +203,17 @@ public class AdminDashboardFrame extends JFrame {
                     JOptionPane.showMessageDialog(this, "ID dan Nama wajib diisi.");
                     return;
                 }
+                String namaFile = null;
+                if (selectedImageFile != null) {
+                    namaFile = saveImage(selectedImageFile, UPLOAD_TENANT_DIR);
+                }
                 try (Connection conn = DatabaseConnection.getConnection();
-                     PreparedStatement ps = conn.prepareStatement("INSERT INTO tenant (id, nama, kategori, deskripsi) VALUES (?,?,?,?)")) {
+                     PreparedStatement ps = conn.prepareStatement("INSERT INTO tenant (id, nama, kategori, deskripsi, foto) VALUES (?,?,?,?,?)")) {
                     ps.setString(1, id);
                     ps.setString(2, nama);
                     ps.setString(3, kategori);
                     ps.setString(4, deskripsi);
+                    ps.setString(5, namaFile);
                     ps.executeUpdate();
                     loadData("");
                     clearForm();
@@ -168,12 +229,34 @@ public class AdminDashboardFrame extends JFrame {
                 String id = (String) tableModel.getValueAt(row, 0);
                 String nama = tfNama.getText().trim();
                 if (nama.isEmpty()) return;
+                String fotoLama = (String) tableModel.getValueAt(row, 4);
+
+                String namaFileBaru = null;
+                // Jika user memilih gambar baru
+                if (selectedImageFile != null) {
+                    // Hapus file lama jika ada
+                    if (fotoLama != null && !fotoLama.isEmpty()) {
+                        new File(UPLOAD_TENANT_DIR + fotoLama).delete();
+                    }
+                    namaFileBaru = saveImage(selectedImageFile, UPLOAD_TENANT_DIR);
+                } else if (deletePhoto) {
+                    // User meminta hapus foto
+                    if (fotoLama != null && !fotoLama.isEmpty()) {
+                        new File(UPLOAD_TENANT_DIR + fotoLama).delete();
+                    }
+                    namaFileBaru = null; // akan di-set null
+                } else {
+                    // Tidak ada perubahan gambar, pertahankan yang lama
+                    namaFileBaru = fotoLama;
+                }
+
                 try (Connection conn = DatabaseConnection.getConnection();
-                     PreparedStatement ps = conn.prepareStatement("UPDATE tenant SET nama=?, kategori=?, deskripsi=? WHERE id=?")) {
+                     PreparedStatement ps = conn.prepareStatement("UPDATE tenant SET nama=?, kategori=?, deskripsi=?, foto=? WHERE id=?")) {
                     ps.setString(1, nama);
                     ps.setString(2, tfKategori.getText().trim());
                     ps.setString(3, tfDeskripsi.getText().trim());
-                    ps.setString(4, id);
+                    ps.setString(4, namaFileBaru);
+                    ps.setString(5, id);
                     ps.executeUpdate();
                     loadData("");
                     clearForm();
@@ -187,7 +270,12 @@ public class AdminDashboardFrame extends JFrame {
                     return;
                 }
                 String id = (String) tableModel.getValueAt(row, 0);
+                String foto = (String) tableModel.getValueAt(row, 4);
                 if (JOptionPane.showConfirmDialog(this, "Yakin hapus tenant " + id + "?") == JOptionPane.YES_OPTION) {
+                    // Hapus file foto jika ada
+                    if (foto != null && !foto.isEmpty()) {
+                        new File(UPLOAD_TENANT_DIR + foto).delete();
+                    }
                     try (Connection conn = DatabaseConnection.getConnection();
                          PreparedStatement ps = conn.prepareStatement("DELETE FROM tenant WHERE id=?")) {
                         ps.setString(1, id);
@@ -199,9 +287,48 @@ public class AdminDashboardFrame extends JFrame {
             });
         }
 
+        private void pilihGambar() {
+            JFileChooser chooser = new JFileChooser();
+            FileNameExtensionFilter filter = new FileNameExtensionFilter("Gambar (JPG, PNG)", "jpg", "jpeg", "png");
+            chooser.setFileFilter(filter);
+            int result = chooser.showOpenDialog(this);
+            if (result == JFileChooser.APPROVE_OPTION) {
+                selectedImageFile = chooser.getSelectedFile();
+                // Tampilkan preview (scaled)
+                ImageIcon icon = new ImageIcon(new ImageIcon(selectedImageFile.getAbsolutePath())
+                        .getImage().getScaledInstance(180, 180, Image.SCALE_SMOOTH));
+                imagePreview.setIcon(icon);
+                imagePreview.setText("");
+                deletePhoto = false; // batalkan hapus
+            }
+        }
+
+        private void loadPreviewImage(String namaFile, String unsplashKeyword) {
+            // Reset
+            imagePreview.setIcon(null);
+            if (namaFile != null && !namaFile.isEmpty()) {
+                File f = new File(UPLOAD_TENANT_DIR + namaFile);
+                if (f.exists()) {
+                    ImageIcon icon = new ImageIcon(new ImageIcon(f.getAbsolutePath())
+                            .getImage().getScaledInstance(180, 180, Image.SCALE_SMOOTH));
+                    imagePreview.setIcon(icon);
+                    return;
+                }
+            }
+            // Fallback Unsplash
+            try {
+                URL url = new URL("https://source.unsplash.com/300x300/?" + unsplashKeyword);
+                ImageIcon icon = new ImageIcon(new ImageIcon(url)
+                        .getImage().getScaledInstance(180, 180, Image.SCALE_SMOOTH));
+                imagePreview.setIcon(icon);
+            } catch (Exception e) {
+                imagePreview.setText("Tidak ada gambar");
+            }
+        }
+
         private void loadData(String keyword) {
             tableModel.setRowCount(0);
-            String sql = "SELECT id, nama, kategori, deskripsi FROM tenant";
+            String sql = "SELECT id, nama, kategori, deskripsi, foto FROM tenant";
             if (!keyword.isEmpty()) sql += " WHERE nama LIKE ? OR kategori LIKE ?";
             try (Connection conn = DatabaseConnection.getConnection();
                  PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -212,7 +339,13 @@ public class AdminDashboardFrame extends JFrame {
                 }
                 ResultSet rs = ps.executeQuery();
                 while (rs.next()) {
-                    tableModel.addRow(new Object[]{rs.getString("id"), rs.getString("nama"), rs.getString("kategori"), rs.getString("deskripsi")});
+                    tableModel.addRow(new Object[]{
+                        rs.getString("id"),
+                        rs.getString("nama"),
+                        rs.getString("kategori"),
+                        rs.getString("deskripsi"),
+                        rs.getString("foto")
+                    });
                 }
             } catch (SQLException ex) { JOptionPane.showMessageDialog(this, "Error: " + ex.getMessage()); }
         }
@@ -224,6 +357,10 @@ public class AdminDashboardFrame extends JFrame {
             tfDeskripsi.setText("");
             table.clearSelection();
             tfId.requestFocus();
+            selectedImageFile = null;
+            deletePhoto = false;
+            imagePreview.setIcon(null);
+            imagePreview.setText("");
         }
     }
 
@@ -234,13 +371,19 @@ public class AdminDashboardFrame extends JFrame {
         private JComboBox<String> cbTenant;
         private JTextField tfSearch, tfId, tfNama, tfHarga, tfDeskripsi;
         private JButton btnTambah, btnEdit, btnHapus, btnRefresh, btnClear;
+        private JLabel imagePreview;
+        private JButton btnPilihGambar, btnHapusGambar;
+        private File selectedImageFile;
+        private boolean deletePhoto = false;
         private List<String> tenantIds = new ArrayList<>();
 
         public MenuPanel() {
             setLayout(new BorderLayout(10, 10));
             setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
 
-            // Form panel
+            // Top panel: form + preview
+            JPanel topPanel = new JPanel(new BorderLayout(10, 10));
+
             JPanel formPanel = new JPanel(new GridBagLayout());
             formPanel.setBorder(BorderFactory.createTitledBorder("Form Menu"));
             GridBagConstraints gbc = new GridBagConstraints();
@@ -309,19 +452,42 @@ public class AdminDashboardFrame extends JFrame {
             btnPanel.add(btnClear);
             formPanel.add(btnPanel, gbc);
 
-            add(formPanel, BorderLayout.NORTH);
+            topPanel.add(formPanel, BorderLayout.CENTER);
+
+            // Preview gambar menu
+            JPanel imagePanel = new JPanel(new BorderLayout());
+            imagePanel.setBorder(BorderFactory.createTitledBorder("Foto Menu"));
+            imagePreview = new JLabel("", SwingConstants.CENTER);
+            imagePreview.setPreferredSize(new Dimension(200, 200));
+            imagePreview.setBorder(BorderFactory.createLineBorder(Color.GRAY));
+            imagePanel.add(imagePreview, BorderLayout.CENTER);
+
+            JPanel btnImagePanel = new JPanel(new FlowLayout());
+            btnPilihGambar = new JButton("Pilih Gambar");
+            btnHapusGambar = new JButton("Hapus Gambar");
+            btnImagePanel.add(btnPilihGambar);
+            btnImagePanel.add(btnHapusGambar);
+            imagePanel.add(btnImagePanel, BorderLayout.SOUTH);
+
+            topPanel.add(imagePanel, BorderLayout.EAST);
+
+            add(topPanel, BorderLayout.NORTH);
 
             // Table
-            tableModel = new DefaultTableModel(new String[]{"ID", "Tenant", "Nama", "Harga", "Deskripsi"}, 0) {
+            tableModel = new DefaultTableModel(new String[]{"ID", "Tenant", "Nama", "Harga", "Deskripsi", "Foto"}, 0) {
                 @Override
                 public boolean isCellEditable(int row, int column) { return false; }
             };
             table = new JTable(tableModel);
             table.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+            // Sembunyikan kolom foto (index 5)
+            table.getColumnModel().getColumn(5).setMinWidth(0);
+            table.getColumnModel().getColumn(5).setMaxWidth(0);
+            table.getColumnModel().getColumn(5).setWidth(0);
+
             JScrollPane scrollPane = new JScrollPane(table);
             add(scrollPane, BorderLayout.CENTER);
 
-            // Load data combo + table
             loadTenantCombo();
             if (cbTenant.getItemCount() > 0) cbTenant.setSelectedIndex(0);
             loadData("");
@@ -340,7 +506,11 @@ public class AdminDashboardFrame extends JFrame {
                         tfNama.setText((String) tableModel.getValueAt(row, 2));
                         tfHarga.setText(String.valueOf(tableModel.getValueAt(row, 3)));
                         tfDeskripsi.setText((String) tableModel.getValueAt(row, 4));
-                        // set combo tenant sesuai
+                        String foto = (String) tableModel.getValueAt(row, 5);
+                        loadPreviewImage(foto, "food");
+                        selectedImageFile = null;
+                        deletePhoto = false;
+                        // set combo tenant
                         String tenantName = (String) tableModel.getValueAt(row, 1);
                         for (int i = 0; i < cbTenant.getItemCount(); i++) {
                             if (cbTenant.getItemAt(i).startsWith(tenantName)) {
@@ -352,9 +522,53 @@ public class AdminDashboardFrame extends JFrame {
                 }
             });
 
+            btnPilihGambar.addActionListener(e -> pilihGambar());
+            btnHapusGambar.addActionListener(e -> {
+                selectedImageFile = null;
+                deletePhoto = true;
+                imagePreview.setIcon(null);
+                imagePreview.setText("Foto akan dihapus");
+            });
+
             btnTambah.addActionListener(e -> tambahMenu());
             btnEdit.addActionListener(e -> editMenu());
             btnHapus.addActionListener(e -> hapusMenu());
+        }
+
+        private void pilihGambar() {
+            JFileChooser chooser = new JFileChooser();
+            FileNameExtensionFilter filter = new FileNameExtensionFilter("Gambar (JPG, PNG)", "jpg", "jpeg", "png");
+            chooser.setFileFilter(filter);
+            int result = chooser.showOpenDialog(this);
+            if (result == JFileChooser.APPROVE_OPTION) {
+                selectedImageFile = chooser.getSelectedFile();
+                ImageIcon icon = new ImageIcon(new ImageIcon(selectedImageFile.getAbsolutePath())
+                        .getImage().getScaledInstance(180, 180, Image.SCALE_SMOOTH));
+                imagePreview.setIcon(icon);
+                imagePreview.setText("");
+                deletePhoto = false;
+            }
+        }
+
+        private void loadPreviewImage(String namaFile, String unsplashKeyword) {
+            imagePreview.setIcon(null);
+            if (namaFile != null && !namaFile.isEmpty()) {
+                File f = new File(UPLOAD_MENU_DIR + namaFile);
+                if (f.exists()) {
+                    ImageIcon icon = new ImageIcon(new ImageIcon(f.getAbsolutePath())
+                            .getImage().getScaledInstance(180, 180, Image.SCALE_SMOOTH));
+                    imagePreview.setIcon(icon);
+                    return;
+                }
+            }
+            try {
+                URL url = new URL("https://source.unsplash.com/300x300/?" + unsplashKeyword);
+                ImageIcon icon = new ImageIcon(new ImageIcon(url)
+                        .getImage().getScaledInstance(180, 180, Image.SCALE_SMOOTH));
+                imagePreview.setIcon(icon);
+            } catch (Exception e) {
+                imagePreview.setText("Tidak ada gambar");
+            }
         }
 
         private void loadTenantCombo() {
@@ -379,7 +593,7 @@ public class AdminDashboardFrame extends JFrame {
         private void loadData(String keyword) {
             tableModel.setRowCount(0);
             String selectedTenantId = getSelectedTenantId();
-            String sql = "SELECT m.id, t.nama AS tenant, m.nama, m.harga, m.deskripsi " +
+            String sql = "SELECT m.id, t.nama AS tenant, m.nama, m.harga, m.deskripsi, m.foto " +
                          "FROM menu m JOIN tenant t ON m.tenant_id = t.id";
             boolean hasWhere = false;
             if (!selectedTenantId.isEmpty()) {
@@ -396,7 +610,14 @@ public class AdminDashboardFrame extends JFrame {
                 if (!keyword.isEmpty()) ps.setString(idx++, "%" + keyword + "%");
                 ResultSet rs = ps.executeQuery();
                 while (rs.next()) {
-                    tableModel.addRow(new Object[]{rs.getString("id"), rs.getString("tenant"), rs.getString("nama"), rs.getInt("harga"), rs.getString("deskripsi")});
+                    tableModel.addRow(new Object[]{
+                        rs.getString("id"),
+                        rs.getString("tenant"),
+                        rs.getString("nama"),
+                        rs.getInt("harga"),
+                        rs.getString("deskripsi"),
+                        rs.getString("foto")
+                    });
                 }
             } catch (SQLException ex) { JOptionPane.showMessageDialog(this, "Error: " + ex.getMessage()); }
         }
@@ -408,6 +629,10 @@ public class AdminDashboardFrame extends JFrame {
             tfDeskripsi.setText("");
             table.clearSelection();
             tfId.requestFocus();
+            selectedImageFile = null;
+            deletePhoto = false;
+            imagePreview.setIcon(null);
+            imagePreview.setText("");
         }
 
         private void tambahMenu() {
@@ -430,13 +655,20 @@ public class AdminDashboardFrame extends JFrame {
                 JOptionPane.showMessageDialog(this, "Harga harus angka.");
                 return;
             }
+
+            String namaFile = null;
+            if (selectedImageFile != null) {
+                namaFile = saveImage(selectedImageFile, UPLOAD_MENU_DIR);
+            }
+
             try (Connection conn = DatabaseConnection.getConnection();
-                 PreparedStatement ps = conn.prepareStatement("INSERT INTO menu (id, tenant_id, nama, harga, deskripsi) VALUES (?,?,?,?,?)")) {
+                 PreparedStatement ps = conn.prepareStatement("INSERT INTO menu (id, tenant_id, nama, harga, deskripsi, foto) VALUES (?,?,?,?,?,?)")) {
                 ps.setString(1, id);
                 ps.setString(2, tenantId);
                 ps.setString(3, nama);
                 ps.setInt(4, harga);
                 ps.setString(5, deskripsi);
+                ps.setString(6, namaFile);
                 ps.executeUpdate();
                 loadData("");
                 clearForm();
@@ -462,12 +694,32 @@ public class AdminDashboardFrame extends JFrame {
                 JOptionPane.showMessageDialog(this, "Harga harus angka.");
                 return;
             }
+
+            String fotoLama = (String) tableModel.getValueAt(row, 5);
+            String namaFileBaru = null;
+
+            if (selectedImageFile != null) {
+                // hapus lama
+                if (fotoLama != null && !fotoLama.isEmpty()) {
+                    new File(UPLOAD_MENU_DIR + fotoLama).delete();
+                }
+                namaFileBaru = saveImage(selectedImageFile, UPLOAD_MENU_DIR);
+            } else if (deletePhoto) {
+                if (fotoLama != null && !fotoLama.isEmpty()) {
+                    new File(UPLOAD_MENU_DIR + fotoLama).delete();
+                }
+                namaFileBaru = null;
+            } else {
+                namaFileBaru = fotoLama;
+            }
+
             try (Connection conn = DatabaseConnection.getConnection();
-                 PreparedStatement ps = conn.prepareStatement("UPDATE menu SET nama=?, harga=?, deskripsi=? WHERE id=?")) {
+                 PreparedStatement ps = conn.prepareStatement("UPDATE menu SET nama=?, harga=?, deskripsi=?, foto=? WHERE id=?")) {
                 ps.setString(1, nama);
                 ps.setInt(2, harga);
                 ps.setString(3, tfDeskripsi.getText().trim());
-                ps.setString(4, id);
+                ps.setString(4, namaFileBaru);
+                ps.setString(5, id);
                 ps.executeUpdate();
                 loadData("");
                 clearForm();
@@ -481,7 +733,12 @@ public class AdminDashboardFrame extends JFrame {
                 return;
             }
             String id = (String) tableModel.getValueAt(row, 0);
+            String foto = (String) tableModel.getValueAt(row, 5);
             if (JOptionPane.showConfirmDialog(this, "Yakin hapus menu " + id + "?") == JOptionPane.YES_OPTION) {
+                // hapus file
+                if (foto != null && !foto.isEmpty()) {
+                    new File(UPLOAD_MENU_DIR + foto).delete();
+                }
                 try (Connection conn = DatabaseConnection.getConnection();
                      PreparedStatement ps = conn.prepareStatement("DELETE FROM menu WHERE id=?")) {
                     ps.setString(1, id);
@@ -527,5 +784,29 @@ public class AdminDashboardFrame extends JFrame {
                 }
             } catch (SQLException ex) { JOptionPane.showMessageDialog(this, "Error: " + ex.getMessage()); }
         }
+    }
+
+    /**
+     * Menyimpan file gambar ke folder tujuan dengan nama unik.
+     * @param source file yang dipilih pengguna
+     * @param targetDir direktori tujuan (misal "uploads/tenant/")
+     * @return nama file yang tersimpan (tanpa path)
+     */
+    private String saveImage(File source, String targetDir) {
+        try {
+            String ext = source.getName().substring(source.getName().lastIndexOf('.'));
+            String newName = System.currentTimeMillis() + "_" + (int)(Math.random() * 1000) + ext;
+            File dest = new File(targetDir + newName);
+            Files.copy(source.toPath(), dest.toPath(), StandardCopyOption.REPLACE_EXISTING);
+            return newName;
+        } catch (IOException e) {
+            JOptionPane.showMessageDialog(this, "Gagal menyimpan gambar: " + e.getMessage());
+            return null;
+        }
+    }
+
+    // Method main untuk testing, dapat dihapus atau dipindahkan
+    public static void main(String[] args) {
+        SwingUtilities.invokeLater(() -> new AdminDashboardFrame().setVisible(true));
     }
 }
