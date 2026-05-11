@@ -1,22 +1,20 @@
-/*
- * Click nbfs://nbhost/SystemFileSystem/Templates/Licenses/license-default.txt to change this license
- * Click nbfs://nbhost/SystemFileSystem/Templates/Classes/Class.java to edit this template
- */
 package com.belajar.foodcourtapp;
 
 import javax.swing.*;
 import java.awt.*;
-import java.sql.*;
-import java.util.Vector;
+import java.io.IOException;
+import java.text.SimpleDateFormat;
+import java.util.*;
+import org.json.JSONArray;
+import org.json.JSONObject;
 
 public class TambahPesananFrame extends JFrame {
     private JComboBox<String> cbTenant, cbMenu;
     private JSpinner spJumlah;
     private JButton btnTambah, btnSimpan;
     private JTextArea taPesanan;
-    private Vector<Object[]> pesananSementara = new Vector<>(); // menu_id, nama, harga, jumlah
-    private Connection conn;
-
+    private Vector<Object[]> pesananSementara = new Vector<>();
+    private Map<String, JSONObject> menuDataMap = new HashMap<>(); // key: menuId
     private AdminDashboardFrame.OrderPanel parent;
 
     public TambahPesananFrame(AdminDashboardFrame.OrderPanel parent) {
@@ -51,43 +49,47 @@ public class TambahPesananFrame extends JFrame {
         add(scroll, BorderLayout.CENTER);
         add(southPanel, BorderLayout.SOUTH);
 
-        // Load tenant
         try {
-            conn = DatabaseConnection.getConnection();
             loadTenantCombo();
-        } catch (SQLException e) {
-            JOptionPane.showMessageDialog(this, "Error koneksi: " + e.getMessage());
+        } catch (IOException e) {
+            JOptionPane.showMessageDialog(this, "Error: " + e.getMessage());
         }
 
         cbTenant.addActionListener(e -> loadMenuCombo());
         btnTambah.addActionListener(e -> tambahItem());
         btnSimpan.addActionListener(e -> simpanPesanan());
 
-        // Pastikan load pertama
-        loadMenuCombo();
+        loadMenuCombo(); // inisialisasi
     }
 
-    private void loadTenantCombo() throws SQLException {
-        Statement stmt = conn.createStatement();
-        ResultSet rs = stmt.executeQuery("SELECT id, nama FROM tenant");
+    private void loadTenantCombo() throws IOException {
+        String jsonStr = FirebaseDB.get("tenant.json");
+        JSONObject tenants = new JSONObject(jsonStr);
         cbTenant.removeAllItems();
-        while (rs.next()) {
-            cbTenant.addItem(rs.getString("nama") + "|" + rs.getString("id"));
+        for (String id : tenants.keySet()) {
+            JSONObject t = tenants.getJSONObject(id);
+            String nama = t.optString("nama", "");
+            cbTenant.addItem(nama + "|" + id);
         }
     }
 
     private void loadMenuCombo() {
+        cbMenu.removeAllItems();
+        menuDataMap.clear();
+        String tenantId = getSelectedTenantId();
+        if (tenantId.isEmpty()) return;
         try {
-            String tenantId = getSelectedTenantId();
-            if (tenantId.isEmpty()) return;
-            PreparedStatement ps = conn.prepareStatement("SELECT id, nama FROM menu WHERE tenant_id=?");
-            ps.setString(1, tenantId);
-            ResultSet rs = ps.executeQuery();
-            cbMenu.removeAllItems();
-            while (rs.next()) {
-                cbMenu.addItem(rs.getString("nama") + "|" + rs.getString("id"));
+            String jsonStr = FirebaseDB.get("menu.json");
+            JSONObject menus = new JSONObject(jsonStr);
+            for (String id : menus.keySet()) {
+                JSONObject m = menus.getJSONObject(id);
+                if (m.optString("tenantId", "").equals(tenantId)) {
+                    String nama = m.optString("nama", "");
+                    cbMenu.addItem(nama + "|" + id);
+                    menuDataMap.put(id, m);
+                }
             }
-        } catch (SQLException e) {
+        } catch (IOException e) {
             e.printStackTrace();
         }
     }
@@ -103,25 +105,20 @@ public class TambahPesananFrame extends JFrame {
         if (menuItem == null) return;
         String[] parts = menuItem.split("\\|");
         String menuId = parts[1];
-        String menuNama = parts[0];
+        JSONObject menu = menuDataMap.get(menuId);
+        if (menu == null) return;
+        String namaMenu = menu.optString("nama", "");
+        int harga = menu.optInt("harga", 0);
         int jumlah = (int) spJumlah.getValue();
-        // cari harga
-        try {
-            PreparedStatement ps = conn.prepareStatement("SELECT harga FROM menu WHERE id=?");
-            ps.setString(1, menuId);
-            ResultSet rs = ps.executeQuery();
-            if (rs.next()) {
-                int harga = rs.getInt("harga");
-                pesananSementara.add(new Object[]{menuId, menuNama, harga, jumlah});
-                updatePesananText();
-            }
-        } catch (SQLException e) { e.printStackTrace(); }
+        pesananSementara.add(new Object[]{menuId, namaMenu, harga, jumlah});
+        updatePesananText();
     }
 
     private void updatePesananText() {
         StringBuilder sb = new StringBuilder();
         for (Object[] item : pesananSementara) {
-            sb.append(item[1]).append(" (").append(item[3]).append("x) Rp").append((int)item[2] * (int)item[3]).append("\n");
+            sb.append(item[1]).append(" (").append(item[3]).append("x) Rp")
+              .append((int)item[2] * (int)item[3]).append("\n");
         }
         taPesanan.setText(sb.toString());
     }
@@ -130,30 +127,46 @@ public class TambahPesananFrame extends JFrame {
         if (pesananSementara.isEmpty()) return;
         String tenantId = getSelectedTenantId();
         try {
-            conn.setAutoCommit(false);
-            PreparedStatement psPesanan = conn.prepareStatement("INSERT INTO pesanan (tenant_id, status) VALUES (?, 'pending')", Statement.RETURN_GENERATED_KEYS);
-            psPesanan.setString(1, tenantId);
-            psPesanan.executeUpdate();
-            ResultSet keys = psPesanan.getGeneratedKeys();
-            int pesananId = 0;
-            if (keys.next()) pesananId = keys.getInt(1);
+            // Generate ID pesanan baru
+            String pesananId = "P" + System.currentTimeMillis();
+            SimpleDateFormat sdf = new SimpleDateFormat("h:mm a");
+            String waktu = sdf.format(new Date());
 
-            PreparedStatement psDetail = conn.prepareStatement("INSERT INTO pesanan_detail (pesanan_id, menu_id, jumlah) VALUES (?,?,?)");
+            JSONObject pesanan = new JSONObject();
+            pesanan.put("id", pesananId);
+            pesanan.put("customerId", "A0001"); // default
+            pesanan.put("tenantId", tenantId);
+            pesanan.put("meja", "A-01"); // default
+            pesanan.put("status", "pending");
+            pesanan.put("waktu", waktu);
+            pesanan.put("totalHarga", 0);
+
+            JSONArray items = new JSONArray();
+            int total = 0;
             for (Object[] item : pesananSementara) {
-                psDetail.setInt(1, pesananId);
-                psDetail.setString(2, (String) item[0]);
-                psDetail.setInt(3, (int) item[3]);
-                psDetail.executeUpdate();
+                String menuId = (String) item[0];
+                String nama = (String) item[1];
+                int harga = (int) item[2];
+                int qty = (int) item[3];
+                total += harga * qty;
+                JSONObject it = new JSONObject();
+                it.put("menuId", menuId);
+                it.put("nama", nama);
+                it.put("qty", qty);
+                it.put("harga", harga);
+                it.put("opsi", "");
+                it.put("hargaTambahan", 0);
+                items.put(it);
             }
-            conn.commit();
+            pesanan.put("totalHarga", total);
+            pesanan.put("items", items);
+
+            FirebaseDB.put("pesanan/" + pesananId + ".json", pesanan.toString());
             JOptionPane.showMessageDialog(this, "Pesanan berhasil disimpan.");
             parent.loadData();
             dispose();
-        } catch (SQLException e) {
-            try { conn.rollback(); } catch (SQLException ex) {}
+        } catch (IOException e) {
             JOptionPane.showMessageDialog(this, "Error: " + e.getMessage());
-        } finally {
-            try { conn.setAutoCommit(true); } catch (SQLException e) {}
         }
     }
 }

@@ -5,6 +5,7 @@ com\belajar\foodcourtapp\TambahPesananFrame.class
 com\belajar\foodcourtapp\TambahTenantFrame.class
 com\belajar\foodcourtapp\AdminDashboardFrame$MenuPanel.class
 com\belajar\foodcourtapp\AdminDashboardFrame$TenantPanel.class
+com\belajar\foodcourtapp\FirebaseDB.class
 com\belajar\foodcourtapp\AdminDashboardFrame.class
 com\belajar\foodcourtapp\MenuFrame.class
 com\belajar\foodcourtapp\AdminDashboardFrame$TenantPanel$1.class

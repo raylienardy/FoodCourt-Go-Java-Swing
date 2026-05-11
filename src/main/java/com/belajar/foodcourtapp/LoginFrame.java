@@ -3,7 +3,8 @@ package com.belajar.foodcourtapp;
 import javax.swing.*;
 import java.awt.*;
 import java.awt.event.ActionEvent;
-import java.sql.*;
+import java.io.IOException;
+import org.json.JSONObject;
 
 public class LoginFrame extends JFrame {
     private JTextField tfUsername;
@@ -26,7 +27,7 @@ public class LoginFrame extends JFrame {
         add(pfPassword);
 
         add(new JLabel("Role:"));
-        cbRole = new JComboBox<>(new String[]{"admin", "tenant"});
+        cbRole = new JComboBox<>(new String[]{"Super Admin", "Tenant", "Customer"});
         add(cbRole);
 
         JButton btnLogin = new JButton("Login");
@@ -37,32 +38,60 @@ public class LoginFrame extends JFrame {
     private void login(ActionEvent e) {
         String username = tfUsername.getText().trim();
         String password = new String(pfPassword.getPassword());
-        String role = (String) cbRole.getSelectedItem();
-        System.out.println("Login attempt: " + username + " / " + role);
+        String selectedRole = (String) cbRole.getSelectedItem();
 
+        // Mapping dari combo ke role di Firebase
+        String firebaseRole;
+        switch (selectedRole) {
+            case "Super Admin":
+                firebaseRole = "super_admin";
+                break;
+            case "Tenant":
+                firebaseRole = "tenant";
+                break;
+            case "Customer":
+                firebaseRole = "customer";
+                break;
+            default:
+                firebaseRole = "";
+        }
 
-        try (Connection conn = DatabaseConnection.getConnection();
-             PreparedStatement ps = conn.prepareStatement("SELECT * FROM users WHERE username=? AND password=? AND role=?")) {
-            ps.setString(1, username);
-            ps.setString(2, password);
-            ps.setString(3, role);
-            ResultSet rs = ps.executeQuery();
-            if (rs.next()) {
-                if ("admin".equals(role)) {
-                    new AdminDashboardFrame().setVisible(true);
-                } else {
-                    // tenant login (asumsikan tenant punya tenant_id sesuai username)
-                    new AdminDashboardFrame().setVisible(true); // sementara kita buka dashboard umum
+        try {
+            String jsonStr = FirebaseDB.get("akun.json");
+            JSONObject akunObj = new JSONObject(jsonStr);
+
+            boolean found = false;
+            for (String key : akunObj.keySet()) {
+                JSONObject akun = akunObj.getJSONObject(key);
+                String uname = akun.optString("username", "");
+                String pass = akun.optString("pass", "");
+                String r = akun.optString("role", "");
+
+                if (uname.equals(username) && pass.equals(password) && r.equals(firebaseRole)) {
+                    found = true;
+                    if (firebaseRole.equals("super_admin")) {
+                        new AdminDashboardFrame().setVisible(true);
+                    } else if (firebaseRole.equals("tenant")) {
+                        new AdminDashboardFrame().setVisible(true); // sesuaikan nanti
+                    } else {
+                        JOptionPane.showMessageDialog(this, "Dashboard customer belum tersedia.");
+                        return;
+                    }
+                    dispose();
+                    break;
                 }
-                dispose();
-            } else {
+            }
+
+            if (!found) {
                 JOptionPane.showMessageDialog(this, "Login gagal.");
             }
-        } catch (SQLException ex) {
+        } catch (IOException ex) {
+            JOptionPane.showMessageDialog(this, "Koneksi gagal: " + ex.getMessage());
+        } catch (Exception ex) {
             JOptionPane.showMessageDialog(this, "Error: " + ex.getMessage());
         }
     }
-
+    
     public static void main(String[] args) {
         SwingUtilities.invokeLater(() -> new LoginFrame().setVisible(true));
     }
