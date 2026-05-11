@@ -1,4 +1,3 @@
-```markdown
 # 🍔 FoodCourt Go - Java Swing (GUI)
 
 Aplikasi desktop sederhana untuk manajemen food court: mengelola tenant, menu, dan pemesanan. Dibangun menggunakan **Java Swing** untuk antarmuka grafis dan **MySQL** sebagai basis data. Proyek ini merupakan versi GUI dari aplikasi Android FoodCourt Go yang sebelumnya dikembangkan.
@@ -197,4 +196,3 @@ Proyek ini dibuat untuk keperluan tugas mata kuliah **Pemrograman Berorientasi O
 ---
 
 **© 2026 – FoodCourt Go Team**
-```
