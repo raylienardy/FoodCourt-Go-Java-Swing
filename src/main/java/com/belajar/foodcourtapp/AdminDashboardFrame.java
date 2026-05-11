@@ -10,21 +10,22 @@ import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
 import java.util.*;
-import java.util.List;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
 public class AdminDashboardFrame extends JFrame {
+    private String role;         // "super_admin" / "tenant"
+    private String tenantId;     // hanya untuk tenant
     private JTabbedPane tabbedPane;
-    private TenantPanel tenantPanel;
-    private MenuPanel menuPanel;
-    private OrderPanel orderPanel;
 
     public static final String UPLOAD_TENANT_DIR = "uploads/tenant/";
     public static final String UPLOAD_MENU_DIR = "uploads/menu/";
 
-    public AdminDashboardFrame() {
-        setTitle("FoodCourt Go - Admin Dashboard");
+    public AdminDashboardFrame(String role, String tenantId) {
+        this.role = role;
+        this.tenantId = tenantId;
+
+        setTitle("FoodCourt Go - " + (role.equals("super_admin") ? "Admin" : "Tenant"));
         setSize(950, 650);
         setDefaultCloseOperation(EXIT_ON_CLOSE);
         setLocationRelativeTo(null);
@@ -33,18 +34,18 @@ public class AdminDashboardFrame extends JFrame {
         new File(UPLOAD_MENU_DIR).mkdirs();
 
         tabbedPane = new JTabbedPane();
-        tenantPanel = new TenantPanel();
-        menuPanel = new MenuPanel();
-        orderPanel = new OrderPanel();
 
-        tabbedPane.addTab("Tenant", tenantPanel);
-        tabbedPane.addTab("Menu", menuPanel);
-        tabbedPane.addTab("Pesanan", orderPanel);
+        if (role.equals("super_admin")) {
+            tabbedPane.addTab("Tenant", new TenantPanel());
+            tabbedPane.addTab("Menu", new MenuPanel(null));  // semua menu
+        } else if (role.equals("tenant")) {
+            tabbedPane.addTab("Menu", new MenuPanel(tenantId));  // hanya menu tenant ini
+        }
 
         add(tabbedPane);
     }
 
-    // ==================== Tenant Panel ====================
+        // ==================== Tenant Panel ====================
     class TenantPanel extends JPanel {
         private JTable table;
         private DefaultTableModel tableModel;
@@ -54,7 +55,7 @@ public class AdminDashboardFrame extends JFrame {
         private JButton btnPilihGambar, btnHapusGambar;
         private File selectedImageFile;
         private boolean deletePhoto = false;
-        private Map<String, JSONObject> tenantCache = new HashMap<>(); // id -> data
+        private Map<String, JSONObject> tenantCache = new HashMap<>();
 
         public TenantPanel() {
             setLayout(new BorderLayout(10, 10));
@@ -199,7 +200,6 @@ public class AdminDashboardFrame extends JFrame {
         private void loadPreviewImage(String urlStr, String unsplashKeyword) {
             imagePreview.setIcon(null);
             if (urlStr != null && !urlStr.isEmpty()) {
-                // Cek apakah URL lengkap atau nama file lokal
                 if (urlStr.startsWith("http")) {
                     try {
                         ImageIcon icon = new ImageIcon(new ImageIcon(new URL(urlStr))
@@ -215,7 +215,6 @@ public class AdminDashboardFrame extends JFrame {
                     }
                 }
             } else {
-                // Fallback Unsplash
                 try {
                     URL url = new URL("https://source.unsplash.com/300x300/?" + unsplashKeyword);
                     ImageIcon icon = new ImageIcon(new ImageIcon(url)
@@ -238,8 +237,9 @@ public class AdminDashboardFrame extends JFrame {
                     if (!keyword.isEmpty()) {
                         String nama = t.optString("nama", "").toLowerCase();
                         String kat = t.optString("kategori", "").toLowerCase();
-                        String kw = keyword.toLowerCase();
-                        if (!nama.contains(kw) && !kat.contains(kw)) continue;
+                        if (!nama.contains(keyword.toLowerCase()) && !kat.contains(keyword.toLowerCase())) {
+                            continue;
+                        }
                     }
                     tableModel.addRow(new Object[]{
                         id,
@@ -250,7 +250,7 @@ public class AdminDashboardFrame extends JFrame {
                     tenantCache.put(id, t);
                 }
             } catch (IOException ex) {
-                JOptionPane.showMessageDialog(this, "Gagal memuat data: " + ex.getMessage());
+                JOptionPane.showMessageDialog(this, "Gagal memuat tenant: " + ex.getMessage());
             }
         }
 
@@ -281,14 +281,11 @@ public class AdminDashboardFrame extends JFrame {
                 tenant.put("nama", nama);
                 tenant.put("kategori", kategori);
                 tenant.put("deskripsi", deskripsi);
-                // Tangani gambar
                 if (selectedImageFile != null) {
-                    String namaFile = saveImage(selectedImageFile, UPLOAD_TENANT_DIR);
-                    tenant.put("gambar", namaFile);
+                    tenant.put("gambar", saveImage(selectedImageFile, UPLOAD_TENANT_DIR));
                 } else {
                     tenant.put("gambar", "");
                 }
-                // Tambahan field default
                 tenant.put("status", "active");
                 tenant.put("email", "");
                 tenant.put("telepon", "");
@@ -323,7 +320,6 @@ public class AdminDashboardFrame extends JFrame {
                 JSONObject oldTenant = tenantCache.get(id);
                 String oldGambar = oldTenant != null ? oldTenant.optString("gambar", "") : "";
                 if (selectedImageFile != null) {
-                    // Hapus file lama jika bukan URL
                     if (!oldGambar.startsWith("http") && !oldGambar.isEmpty()) {
                         new File(UPLOAD_TENANT_DIR + oldGambar).delete();
                     }
@@ -384,9 +380,12 @@ public class AdminDashboardFrame extends JFrame {
         private File selectedImageFile;
         private boolean deletePhoto = false;
         private Map<String, JSONObject> menuCache = new HashMap<>();
-        private Map<String, String> tenantNameMap = new HashMap<>(); // id -> nama
+        private Map<String, String> tenantNameMap = new HashMap<>();
+        private String filterTenantId; // jika tidak null, paksa hanya menampilkan menu tenant ini
 
-        public MenuPanel() {
+        public MenuPanel(String filterTenantId) {
+            this.filterTenantId = filterTenantId;
+
             setLayout(new BorderLayout(10, 10));
             setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
 
@@ -397,11 +396,18 @@ public class AdminDashboardFrame extends JFrame {
             gbc.insets = new Insets(5, 5, 5, 5);
             gbc.fill = GridBagConstraints.HORIZONTAL;
 
+            // Tenant combo
             gbc.gridx = 0; gbc.gridy = 0;
             formPanel.add(new JLabel("Tenant:"), gbc);
             gbc.gridx = 1;
             cbTenant = new JComboBox<>();
             formPanel.add(cbTenant, gbc);
+
+            // Kalau tenant biasa, combo hanya berisi satu item dan tidak bisa diubah
+            if (filterTenantId != null) {
+                cbTenant.setEnabled(false);  // tidak bisa ganti tenant
+            }
+
             gbc.gridx = 2;
             formPanel.add(new JLabel("Cari:"), gbc);
             gbc.gridx = 3;
@@ -435,7 +441,6 @@ public class AdminDashboardFrame extends JFrame {
             gbc.gridwidth = 2;
             tfDeskripsi = new JTextField(15);
             formPanel.add(tfDeskripsi, gbc);
-            gbc.gridwidth = 1;
 
             gbc.gridy = 3; gbc.gridx = 0;
             gbc.gridwidth = 5;
@@ -454,6 +459,7 @@ public class AdminDashboardFrame extends JFrame {
 
             topPanel.add(formPanel, BorderLayout.CENTER);
 
+            // Preview gambar
             JPanel imagePanel = new JPanel(new BorderLayout());
             imagePanel.setBorder(BorderFactory.createTitledBorder("Foto Menu"));
             imagePreview = new JLabel("", SwingConstants.CENTER);
@@ -485,9 +491,12 @@ public class AdminDashboardFrame extends JFrame {
             btnSearch.addActionListener(e -> loadData(tfSearch.getText()));
             btnRefresh.addActionListener(e -> loadData(""));
             btnClear.addActionListener(e -> clearForm());
-            cbTenant.addActionListener(e -> loadData(""));
+            if (cbTenant.isEnabled()) {
+                cbTenant.addActionListener(e -> loadData(""));
+            }
 
             table.getSelectionModel().addListSelectionListener(e -> {
+                // seperti sebelumnya, isi form dan preview gambar
                 if (!e.getValueIsAdjusting()) {
                     int row = table.getSelectedRow();
                     if (row != -1) {
@@ -502,13 +511,14 @@ public class AdminDashboardFrame extends JFrame {
                             loadPreviewImage(gambar, "food");
                             selectedImageFile = null;
                             deletePhoto = false;
-
-                            // Set tenant combo
-                            String tenantId = menu.optString("tenantId", "");
-                            for (int i = 0; i < cbTenant.getItemCount(); i++) {
-                                if (cbTenant.getItemAt(i).endsWith("|" + tenantId)) {
-                                    cbTenant.setSelectedIndex(i);
-                                    break;
+                            // set combo tenant hanya jika bukan tenant spesifik
+                            if (cbTenant.isEnabled()) {
+                                String tid = menu.optString("tenantId", "");
+                                for (int i = 0; i < cbTenant.getItemCount(); i++) {
+                                    if (cbTenant.getItemAt(i).endsWith("|" + tid)) {
+                                        cbTenant.setSelectedIndex(i);
+                                        break;
+                                    }
                                 }
                             }
                         }
@@ -530,6 +540,7 @@ public class AdminDashboardFrame extends JFrame {
         }
 
         private void pilihGambar() {
+            // sama persis seperti sebelumnya
             JFileChooser chooser = new JFileChooser();
             FileNameExtensionFilter filter = new FileNameExtensionFilter("Gambar (JPG, PNG)", "jpg", "jpeg", "png");
             chooser.setFileFilter(filter);
@@ -544,6 +555,7 @@ public class AdminDashboardFrame extends JFrame {
         }
 
         private void loadPreviewImage(String urlStr, String unsplashKeyword) {
+            // sama persis seperti sebelumnya
             imagePreview.setIcon(null);
             if (urlStr != null && !urlStr.isEmpty()) {
                 if (urlStr.startsWith("http")) {
@@ -581,15 +593,22 @@ public class AdminDashboardFrame extends JFrame {
                 for (String id : tenants.keySet()) {
                     JSONObject t = tenants.getJSONObject(id);
                     String nama = t.optString("nama", "");
+                    // Jika filterTenantId tidak null, hanya tambahkan yang sesuai
+                    if (filterTenantId != null && !id.equals(filterTenantId)) continue;
                     cbTenant.addItem(nama + "|" + id);
                     tenantNameMap.put(id, nama);
                 }
             } catch (IOException ex) {
                 JOptionPane.showMessageDialog(this, "Gagal memuat tenant: " + ex.getMessage());
             }
+            // Jika filter tenant, set selected index ke 0
+            if (filterTenantId != null) {
+                cbTenant.setSelectedIndex(0);
+            }
         }
 
         private String getSelectedTenantId() {
+            if (filterTenantId != null) return filterTenantId;
             String item = (String) cbTenant.getSelectedItem();
             if (item == null) return "";
             return item.split("\\|")[1];
@@ -598,18 +617,18 @@ public class AdminDashboardFrame extends JFrame {
         private void loadData(String keyword) {
             tableModel.setRowCount(0);
             menuCache.clear();
-            String filterTenantId = getSelectedTenantId();
+            String selectedTenantId = getSelectedTenantId();
             try {
                 String jsonStr = FirebaseDB.get("menu.json");
                 JSONObject menus = new JSONObject(jsonStr);
                 for (String id : menus.keySet()) {
                     JSONObject m = menus.getJSONObject(id);
-                    String tenantId = m.optString("tenantId", "");
-                    if (!filterTenantId.isEmpty() && !tenantId.equals(filterTenantId)) continue;
+                    String tid = m.optString("tenantId", "");
+                    if (!selectedTenantId.isEmpty() && !tid.equals(selectedTenantId)) continue;
                     String namaMenu = m.optString("nama", "");
                     if (!keyword.isEmpty() && !namaMenu.toLowerCase().contains(keyword.toLowerCase())) continue;
 
-                    String namaTenant = tenantNameMap.getOrDefault(tenantId, "?");
+                    String namaTenant = tenantNameMap.getOrDefault(tid, "?");
                     tableModel.addRow(new Object[]{
                         id,
                         namaTenant,
@@ -625,6 +644,7 @@ public class AdminDashboardFrame extends JFrame {
         }
 
         private void clearForm() {
+            // sama
             tfId.setText("");
             tfNama.setText("");
             tfHarga.setText("");
@@ -642,8 +662,8 @@ public class AdminDashboardFrame extends JFrame {
             String nama = tfNama.getText().trim();
             String hargaStr = tfHarga.getText().trim();
             String deskripsi = tfDeskripsi.getText().trim();
-            String tenantId = getSelectedTenantId();
-            if (tenantId.isEmpty()) {
+            String tenantIdMenu = getSelectedTenantId();  // otomatis benar karena combo terbatas
+            if (tenantIdMenu.isEmpty()) {
                 JOptionPane.showMessageDialog(this, "Pilih tenant dulu.");
                 return;
             }
@@ -662,9 +682,9 @@ public class AdminDashboardFrame extends JFrame {
                 menu.put("nama", nama);
                 menu.put("deskripsi", deskripsi);
                 menu.put("harga", harga);
-                menu.put("tenantId", tenantId);
+                menu.put("tenantId", tenantIdMenu);
                 menu.put("gambar", selectedImageFile != null ? saveImage(selectedImageFile, UPLOAD_MENU_DIR) : "");
-                menu.put("tambahan", new JSONArray()); // kosong
+                menu.put("tambahan", new JSONArray());
 
                 FirebaseDB.put("menu/" + id + ".json", menu.toString());
                 loadData("");
@@ -675,6 +695,7 @@ public class AdminDashboardFrame extends JFrame {
         }
 
         private void editMenu() {
+            // sama, tetapi tidak bisa ubah tenant jika filterTenantId != null (abaikan combo)
             int row = table.getSelectedRow();
             if (row == -1) {
                 JOptionPane.showMessageDialog(this, "Pilih menu yang akan diedit.");
@@ -738,59 +759,8 @@ public class AdminDashboardFrame extends JFrame {
         }
     }
 
-    // ==================== Order Panel ====================
-    class OrderPanel extends JPanel {
-        private JTable table;
-        private DefaultTableModel tableModel;
-
-        public OrderPanel() {
-            setLayout(new BorderLayout(10, 10));
-            setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
-            tableModel = new DefaultTableModel(new String[]{"ID", "Tenant", "Waktu", "Status"}, 0) {
-                @Override public boolean isCellEditable(int row, int column) { return false; }
-            };
-            table = new JTable(tableModel);
-            JScrollPane scrollPane = new JScrollPane(table);
-            add(scrollPane, BorderLayout.CENTER);
-
-            JButton btnTambah = new JButton("Tambah Pesanan");
-            btnTambah.addActionListener(e -> new TambahPesananFrame(this).setVisible(true));
-            JPanel btnPanel = new JPanel();
-            btnPanel.add(btnTambah);
-            add(btnPanel, BorderLayout.SOUTH);
-
-            loadData();
-        }
-
-        void loadData() {
-            tableModel.setRowCount(0);
-            try {
-                String jsonStr = FirebaseDB.get("pesanan.json");
-                JSONObject pesanan = new JSONObject(jsonStr);
-                for (String id : pesanan.keySet()) {
-                    JSONObject p = pesanan.getJSONObject(id);
-                    String tenantId = p.optString("tenantId", "");
-                    String namaTenant = "";
-                    // Ambil nama tenant dari cache? Bisa load ulang tenant.json
-                    try {
-                        JSONObject tObj = new JSONObject(FirebaseDB.get("tenant/" + tenantId + ".json"));
-                        namaTenant = tObj.optString("nama", "");
-                    } catch (IOException e) { namaTenant = tenantId; }
-                    tableModel.addRow(new Object[]{
-                        id,
-                        namaTenant,
-                        p.optString("waktu", ""),
-                        p.optString("status", "")
-                    });
-                }
-            } catch (IOException ex) {
-                JOptionPane.showMessageDialog(this, "Gagal memuat pesanan: " + ex.getMessage());
-            }
-        }
-    }
-
-    // ------------------ Helper save image ------------------
     private String saveImage(File source, String targetDir) {
+        // sama
         try {
             String ext = source.getName().substring(source.getName().lastIndexOf('.'));
             String newName = System.currentTimeMillis() + "_" + (int)(Math.random() * 1000) + ext;

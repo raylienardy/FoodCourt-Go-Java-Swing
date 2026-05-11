@@ -40,27 +40,18 @@ public class LoginFrame extends JFrame {
         String password = new String(pfPassword.getPassword());
         String selectedRole = (String) cbRole.getSelectedItem();
 
-        // Mapping dari combo ke role di Firebase
         String firebaseRole;
         switch (selectedRole) {
-            case "Super Admin":
-                firebaseRole = "super_admin";
-                break;
-            case "Tenant":
-                firebaseRole = "tenant";
-                break;
-            case "Customer":
-                firebaseRole = "customer";
-                break;
-            default:
-                firebaseRole = "";
+            case "Super Admin": firebaseRole = "super_admin"; break;
+            case "Tenant":      firebaseRole = "tenant";      break;
+            case "Customer":    firebaseRole = "customer";    break;
+            default:            firebaseRole = "";
         }
 
         try {
             String jsonStr = FirebaseDB.get("akun.json");
             JSONObject akunObj = new JSONObject(jsonStr);
 
-            boolean found = false;
             for (String key : akunObj.keySet()) {
                 JSONObject akun = akunObj.getJSONObject(key);
                 String uname = akun.optString("username", "");
@@ -68,30 +59,24 @@ public class LoginFrame extends JFrame {
                 String r = akun.optString("role", "");
 
                 if (uname.equals(username) && pass.equals(password) && r.equals(firebaseRole)) {
-                    found = true;
                     if (firebaseRole.equals("super_admin")) {
-                        new AdminDashboardFrame().setVisible(true);
+                        new AdminDashboardFrame("super_admin", null).setVisible(true);
                     } else if (firebaseRole.equals("tenant")) {
-                        new AdminDashboardFrame().setVisible(true); // sesuaikan nanti
-                    } else {
-                        JOptionPane.showMessageDialog(this, "Dashboard customer belum tersedia.");
-                        return;
+                        String tenantId = akun.optString("tenantId", "");
+                        new AdminDashboardFrame("tenant", tenantId).setVisible(true);
+                    } else if (firebaseRole.equals("customer")) {
+                        new CustomerFrame(key).setVisible(true);  // key = A0001, dsb
                     }
                     dispose();
-                    break;
+                    return;
                 }
             }
-
-            if (!found) {
-                JOptionPane.showMessageDialog(this, "Login gagal.");
-            }
+            JOptionPane.showMessageDialog(this, "Login gagal.");
         } catch (IOException ex) {
             JOptionPane.showMessageDialog(this, "Koneksi gagal: " + ex.getMessage());
-        } catch (Exception ex) {
-            JOptionPane.showMessageDialog(this, "Error: " + ex.getMessage());
         }
     }
-    
+
     public static void main(String[] args) {
         SwingUtilities.invokeLater(() -> new LoginFrame().setVisible(true));
     }
